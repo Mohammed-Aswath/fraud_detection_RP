@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+build/
+dist/
+wheels/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+./ieee-fraud-detection
+
+# Virtual environments and local secrets
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# Experiment tracking and DVC cache
+mlruns/
+.dvc/cache/
+!.dvc/config
+!.dvc/.gitignore
+
+# Local datasets and generated artifacts
+data/raw/*.csv
+data/processed/*
+!data/processed/.gitkeep
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo

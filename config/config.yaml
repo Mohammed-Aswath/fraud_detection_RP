@@ -1,0 +1,25 @@
+# Dataset locations, relative to the repository root.
+data:
+  raw_path: data/raw
+  train_transaction_path: data/raw/train_transaction.csv
+  train_identity_path: data/raw/train_identity.csv
+  processed_path: data/processed
+  splits_path: data/splits
+
+# Chronological train, validation, and test allocations.
+temporal_split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+# Relative costs used when selecting a fraud decision policy.
+cost_matrix:
+  fp_cost: 1.0
+  fn_cost_multiplier: 10.0
+
+# Add LightGBM training parameters here as the model is developed.
+model:
+  lightgbm: {}
+
+# Placeholder; tune against validation data later.
+decision_threshold: 0.50
