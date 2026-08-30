@@ -5,8 +5,8 @@ stages:
     deps:
     - path: config/config.yaml
       hash: md5
-      md5: 3fc29f68f672c07954951abcd89c408d
-      size: 1134
+      md5: 9f10cf3248ec1ac95e97ca9e853ccce2
+      size: 1617
     - path: data/splits/test.parquet
       hash: md5
       md5: 4690efd2e5a3b60009a384b6953c4a01
@@ -40,3 +40,35 @@ stages:
       hash: md5
       md5: c3a7aed245750f30e3498daf102b13c5
       size: 11684797
+  train:
+    cmd: uv run python -m src.models.train
+    deps:
+    - path: config/config.yaml
+      hash: md5
+      md5: 9f10cf3248ec1ac95e97ca9e853ccce2
+      size: 1617
+    - path: data/processed/test_features.parquet
+      hash: md5
+      md5: 074df2fbdc1bd7a125be928e0cafb187
+      size: 12792560
+    - path: data/processed/train_features.parquet
+      hash: md5
+      md5: 2eb2a1ab44a182613dcb3f0b2c48fe45
+      size: 55336495
+    - path: data/processed/val_features.parquet
+      hash: md5
+      md5: c3a7aed245750f30e3498daf102b13c5
+      size: 11684797
+    - path: src/models/cost_matrix.py
+      hash: md5
+      md5: 37e62118f4ad81159fd7f23199845c40
+      size: 3772
+    - path: src/models/train.py
+      hash: md5
+      md5: c88040fc27ec768d2a6e06a85be2734a
+      size: 11143
+    outs:
+    - path: models/model.joblib
+      hash: md5
+      md5: 86d6adc19dfdb2d86a6aa35ec269b72a
+      size: 511416

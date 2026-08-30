@@ -12,3 +12,14 @@ stages:
       - data/processed/val_features.parquet
       - data/processed/test_features.parquet
       - artifacts/encoders.joblib
+  train:
+    cmd: uv run python -m src.models.train
+    deps:
+      - data/processed/train_features.parquet
+      - data/processed/val_features.parquet
+      - data/processed/test_features.parquet
+      - src/models/train.py
+      - src/models/cost_matrix.py
+      - config/config.yaml
+    outs:
+      - models/model.joblib
