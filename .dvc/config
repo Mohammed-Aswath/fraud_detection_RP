@@ -1,6 +1,4 @@
 [core]
     remote = dagshub
-['remote "origin"']
-    url = https://dagshub.com/Mohammed-Aswath/fraud_detection_RP.dvc
 ['remote "dagshub"']
     url = https://dagshub.com/Mohammed-Aswath/fraud_detection_RP.dvc

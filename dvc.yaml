@@ -1,0 +1,14 @@
+stages:
+  feature_engineering:
+    cmd: uv run python -m src.features.engineer
+    deps:
+      - data/splits/train.parquet
+      - data/splits/val.parquet
+      - data/splits/test.parquet
+      - src/features/engineer.py
+      - config/config.yaml
+    outs:
+      - data/processed/train_features.parquet
+      - data/processed/val_features.parquet
+      - data/processed/test_features.parquet
+      - artifacts/encoders.joblib

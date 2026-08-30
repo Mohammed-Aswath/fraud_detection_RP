@@ -1,0 +1,42 @@
+schema: '2.0'
+stages:
+  feature_engineering:
+    cmd: uv run python -m src.features.engineer
+    deps:
+    - path: config/config.yaml
+      hash: md5
+      md5: 3fc29f68f672c07954951abcd89c408d
+      size: 1134
+    - path: data/splits/test.parquet
+      hash: md5
+      md5: 4690efd2e5a3b60009a384b6953c4a01
+      size: 13409760
+    - path: data/splits/train.parquet
+      hash: md5
+      md5: 0e1083091659a995913c5a2e3a6928a4
+      size: 58985270
+    - path: data/splits/val.parquet
+      hash: md5
+      md5: 0dd3b4ac1899a6f55b96dd8608fdd864
+      size: 12482550
+    - path: src/features/engineer.py
+      hash: md5
+      md5: 4d15a5cba0cbeeb58ad094b2f1680cfd
+      size: 19023
+    outs:
+    - path: artifacts/encoders.joblib
+      hash: md5
+      md5: 3e230cc20d67e405d89e6285efe55f1d
+      size: 90964
+    - path: data/processed/test_features.parquet
+      hash: md5
+      md5: 074df2fbdc1bd7a125be928e0cafb187
+      size: 12792560
+    - path: data/processed/train_features.parquet
+      hash: md5
+      md5: 2eb2a1ab44a182613dcb3f0b2c48fe45
+      size: 55336495
+    - path: data/processed/val_features.parquet
+      hash: md5
+      md5: c3a7aed245750f30e3498daf102b13c5
+      size: 11684797

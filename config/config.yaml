@@ -23,3 +23,23 @@ model:
 
 # Placeholder; tune against validation data later.
 decision_threshold: 0.50
+
+# Phase 2 feature-engineering settings.
+feature_engineering:
+  high_missingness_threshold: 0.90
+  target_column: isFraud
+  missing_category: __MISSING__
+  target_encoding:
+    columns:
+      - card4
+      - card6
+      - P_emaildomain
+      - R_emaildomain
+      - DeviceType
+      - DeviceInfo
+    smoothing: 20.0
+  velocity:
+    card_column: card1
+    email_column: P_emaildomain
+    windows_seconds: [3600, 86400]
+  encoder_artifact_path: artifacts/encoders.joblib
