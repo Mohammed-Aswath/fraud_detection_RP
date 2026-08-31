@@ -23,3 +23,11 @@ stages:
       - config/config.yaml
     outs:
       - models/model.joblib
+  explain:
+    cmd: uv run python -m src.explain.shap_explainer
+    deps:
+      - models/model.joblib
+      - data/processed/test_features.parquet
+      - src/explain/shap_explainer.py
+    outs:
+      - artifacts/shap/
