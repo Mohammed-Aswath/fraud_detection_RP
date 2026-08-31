@@ -1,0 +1,8 @@
+feature,feature_type,importance_mean,importance_std,pct_drop
+card4__target_rate,TARGET-ENCODED,0.0797644080791583,0.001525009153331595,42.234189663876734
+card6__target_rate,TARGET-ENCODED,0.023232615866211663,0.0007392638264580014,12.30136007413006
+card1__amount_zscore_history,VELOCITY,0.0003778772468872399,0.0002290499635192904,0.20008095965384953
+card1__transaction_count_1h,VELOCITY,0.0,0.0,0.0
+card1__transaction_count_24h,VELOCITY,0.0,0.0,0.0
+card1__amount_total_1h,VELOCITY,0.0,0.0,0.0
+card1_email__seconds_since_last,VELOCITY,0.0,0.0,0.0

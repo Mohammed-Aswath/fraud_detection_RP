@@ -25,6 +25,18 @@ from src.utils.config_loader import load_config
 
 LOGGER = logging.getLogger(__name__)
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+HP_SEARCH_CONFIGURATIONS = (
+    {"num_leaves": 15, "reg_lambda": 0.1},
+    {"num_leaves": 31, "reg_lambda": 1.0},
+    {"num_leaves": 63, "reg_lambda": 5.0},
+)
+VELOCITY_FEATURES = (
+    "card1__transaction_count_1h",
+    "card1__transaction_count_24h",
+    "card1__amount_total_1h",
+    "card1__amount_zscore_history",
+    "card1_email__seconds_since_last",
+)
 
 
 def _repository_path(path_value: str | Path) -> Path:
@@ -79,16 +91,19 @@ def _classification_metrics(y_true: pd.Series, probabilities: np.ndarray, thresh
 
 
 def _naive_costs(
-    y_true: pd.Series, transaction_amounts: pd.Series, fp_cost: float, fn_cost_multiplier: float
+    y_true: pd.Series,
+    transaction_amounts: pd.Series,
+    fp_cost_rate: float,
+    fn_cost_multiplier: float,
 ) -> dict[str, float]:
     """Calculate the cost of always flagging and never flagging transactions."""
     all_negative = np.zeros(len(y_true), dtype=float)
     all_positive = np.ones(len(y_true), dtype=float)
     flag_nothing, _ = compute_cost(
-        y_true, all_negative, 0.5, transaction_amounts, fp_cost, fn_cost_multiplier
+        y_true, all_negative, 0.5, transaction_amounts, fp_cost_rate, fn_cost_multiplier
     )
     flag_everything, _ = compute_cost(
-        y_true, all_positive, 0.5, transaction_amounts, fp_cost, fn_cost_multiplier
+        y_true, all_positive, 0.5, transaction_amounts, fp_cost_rate, fn_cost_multiplier
     )
     return {"flag_nothing_cost": flag_nothing, "flag_everything_cost": flag_everything}
 
@@ -126,6 +141,95 @@ def _log_cost_curve(curve: pd.DataFrame, selected_threshold: float) -> None:
     plt.close(figure)
 
 
+def _fit_candidate(
+    train_features: pd.DataFrame,
+    y_train: pd.Series,
+    validation_features: pd.DataFrame,
+    y_validation: pd.Series,
+    parameters: dict[str, Any],
+    run_name: str,
+    run_type: str,
+) -> dict[str, Any]:
+    """Train one early-stopped LightGBM candidate and log its validation PR-AUC."""
+    model = lgb.LGBMClassifier(**parameters)
+    with mlflow.start_run(run_name=run_name) as run:
+        mlflow.set_tag("run_type", run_type)
+        _log_parameters(model.get_params())
+        model.fit(
+            train_features,
+            y_train,
+            eval_set=[(validation_features, y_validation)],
+            eval_metric="average_precision",
+            callbacks=[
+                lgb.early_stopping(stopping_rounds=100, first_metric_only=True),
+                lgb.log_evaluation(period=50),
+            ],
+        )
+        best_iteration = int(model.best_iteration_ or model.n_estimators)
+        validation_probabilities = model.predict_proba(
+            validation_features, num_iteration=best_iteration
+        )[:, 1]
+        validation_pr_auc = float(average_precision_score(y_validation, validation_probabilities))
+        mlflow.log_metrics(
+            {
+                "val_pr_auc": validation_pr_auc,
+                "best_iteration": best_iteration,
+            }
+        )
+        run_id = run.info.run_id
+    return {
+        "model": model,
+        "validation_probabilities": validation_probabilities,
+        "val_pr_auc": validation_pr_auc,
+        "best_iteration": best_iteration,
+        "run_id": run_id,
+        "parameters": parameters,
+        "run_name": run_name,
+        "run_type": run_type,
+    }
+
+
+def _log_feature_importances(
+    model: lgb.LGBMClassifier, feature_names: pd.Index
+) -> pd.DataFrame:
+    """Log top gain importances and print the ranks of Phase 2 velocity features."""
+    importance_data = pd.DataFrame(
+        {
+            "feature": feature_names,
+            "gain_importance": model.booster_.feature_importance(importance_type="gain"),
+        }
+    ).sort_values("gain_importance", ascending=False, kind="stable")
+    importance_data["rank"] = np.arange(1, len(importance_data) + 1)
+    top_30 = importance_data.head(30).copy()
+
+    with tempfile.TemporaryDirectory() as temp_directory:
+        temp_path = Path(temp_directory)
+        csv_path = temp_path / "top_30_gain_importances.csv"
+        top_30.to_csv(csv_path, index=False)
+        figure, axis = plt.subplots(figsize=(10, 9))
+        plot_data = top_30.sort_values("gain_importance")
+        axis.barh(plot_data["feature"], plot_data["gain_importance"], color="tab:blue")
+        axis.set(title="Top 30 feature importances by LightGBM gain", xlabel="Gain")
+        figure.tight_layout()
+        plot_path = temp_path / "top_30_gain_importances.png"
+        figure.savefig(plot_path, dpi=150)
+        plt.close(figure)
+        mlflow.log_artifact(str(csv_path), artifact_path="feature_importance")
+        mlflow.log_artifact(str(plot_path), artifact_path="feature_importance")
+
+    importance_by_feature = importance_data.set_index("feature")
+    print("\nPhase 2 velocity feature gain ranks:")
+    for feature in VELOCITY_FEATURES:
+        if feature in importance_by_feature.index:
+            row = importance_by_feature.loc[feature]
+            print(f"  {feature}: rank {int(row['rank'])}, gain {row['gain_importance']:.2f}")
+        else:
+            print(f"  {feature}: not present in model features")
+    print("\nTop 10 gain feature importances:")
+    print(top_30.head(10).to_string(index=False, formatters={"gain_importance": "{:.2f}".format}))
+    return top_30
+
+
 def _register_production_model(run_id: str, config: dict[str, Any]) -> None:
     """Register the selected run's logged model and tag its latest version."""
     model_name = config["mlflow"]["registry_model_name"]
@@ -151,42 +255,100 @@ def train_model() -> dict[str, Any]:
     validation_features, y_validation = _feature_matrix(validation_data, target_column)
     if "TransactionAmt" not in validation_data:
         raise KeyError("TransactionAmt is required for transaction-aware cost optimization.")
+    validation_amounts = validation_data["TransactionAmt"]
+    print(
+        "Validation TransactionAmt: "
+        f"mean: {validation_amounts.mean():.2f}, "
+        f"median: {validation_amounts.median():.2f}"
+    )
 
     positive_count = int(y_train.sum())
     negative_count = int(len(y_train) - positive_count)
     if positive_count == 0 or negative_count == 0:
         raise ValueError("Training data must contain both fraud and non-fraud examples.")
     scale_pos_weight = negative_count / positive_count
-    parameters = {
-        **config["model"]["lightgbm"],
-        "scale_pos_weight": scale_pos_weight,
-    }
-    model = lgb.LGBMClassifier(**parameters)
+    base_parameters = config["model"]["lightgbm"]
+    search_results: list[dict[str, Any]] = []
+    for candidate in HP_SEARCH_CONFIGURATIONS:
+        parameters = {
+            **base_parameters,
+            **candidate,
+            "scale_pos_weight": scale_pos_weight,
+        }
+        search_results.append(
+            _fit_candidate(
+                train_features,
+                y_train,
+                validation_features,
+                y_validation,
+                parameters,
+                run_name=(
+                    f"hp-search-leaves-{candidate['num_leaves']}-lambda-{candidate['reg_lambda']}"
+                ),
+                run_type="hp-search",
+            )
+        )
 
-    with mlflow.start_run(run_name="baseline") as baseline_run:
-        mlflow.set_tag("run_type", "baseline")
-        _log_parameters(model.get_params())
-        mlflow.log_param("train_class_imbalance_ratio", scale_pos_weight)
-        model.fit(train_features, y_train, callbacks=[lgb.log_evaluation(period=50)])
-        validation_probabilities = model.predict_proba(validation_features)[:, 1]
-        baseline_metrics = _classification_metrics(y_validation, validation_probabilities, 0.5)
-        mlflow.log_metrics({f"val_{name}": value for name, value in baseline_metrics.items()})
-        baseline_run_id = baseline_run.info.run_id
+    unweighted_parameters = {
+        **base_parameters,
+        "num_leaves": 31,
+        "reg_lambda": 1.0,
+        "scale_pos_weight": 1.0,
+    }
+    search_results.append(
+        _fit_candidate(
+            train_features,
+            y_train,
+            validation_features,
+            y_validation,
+            unweighted_parameters,
+            run_name="scale-pos-weight-1",
+            run_type="scale-pos-weight-comparison",
+        )
+    )
+    comparison_table = pd.DataFrame(
+        [
+            {
+                "run_name": result["run_name"],
+                "run_type": result["run_type"],
+                "num_leaves": result["parameters"]["num_leaves"],
+                "reg_lambda": result["parameters"]["reg_lambda"],
+                "scale_pos_weight": result["parameters"]["scale_pos_weight"],
+                "best_iteration": result["best_iteration"],
+                "val_pr_auc": result["val_pr_auc"],
+            }
+            for result in search_results
+        ]
+    ).sort_values("val_pr_auc", ascending=False, kind="stable")
+    print("\nValidation hyperparameter and scale_pos_weight comparison:")
+    print(comparison_table.to_string(index=False, formatters={"val_pr_auc": "{:.6f}".format}))
+    best_result = max(search_results, key=lambda result: result["val_pr_auc"])
+    print(
+        "\nBest validation PR-AUC configuration: "
+        f"num_leaves={best_result['parameters']['num_leaves']}, "
+        f"reg_lambda={best_result['parameters']['reg_lambda']}, "
+        f"scale_pos_weight={best_result['parameters']['scale_pos_weight']:.4f}, "
+        f"PR-AUC={best_result['val_pr_auc']:.6f}"
+    )
+    model = best_result["model"]
+    validation_probabilities = best_result["validation_probabilities"]
+    best_iteration = best_result["best_iteration"]
+    baseline_run_id = best_result["run_id"]
 
     cost_settings = config["cost_matrix"]
     selected_threshold, cost_curve = find_optimal_threshold(
         y_validation,
         validation_probabilities,
-        validation_data["TransactionAmt"],
-        fp_cost=float(cost_settings["fp_cost"]),
+        validation_amounts,
+        fp_cost_rate=float(cost_settings["fp_cost_rate"]),
         fn_cost_multiplier=float(cost_settings["fn_cost_multiplier"]),
     )
     optimized_cost, optimized_breakdown = compute_cost(
         y_validation,
         validation_probabilities,
         selected_threshold,
-        validation_data["TransactionAmt"],
-        fp_cost=float(cost_settings["fp_cost"]),
+        validation_amounts,
+        fp_cost_rate=float(cost_settings["fp_cost_rate"]),
         fn_cost_multiplier=float(cost_settings["fn_cost_multiplier"]),
     )
     optimized_metrics = _classification_metrics(
@@ -194,8 +356,8 @@ def train_model() -> dict[str, Any]:
     )
     naive_costs = _naive_costs(
         y_validation,
-        validation_data["TransactionAmt"],
-        float(cost_settings["fp_cost"]),
+        validation_amounts,
+        float(cost_settings["fp_cost_rate"]),
         float(cost_settings["fn_cost_multiplier"]),
     )
     model.fraud_risk_threshold_ = selected_threshold
@@ -207,11 +369,13 @@ def train_model() -> dict[str, Any]:
     with mlflow.start_run(run_name="cost-optimized") as cost_run:
         mlflow.set_tag("run_type", "cost-optimized")
         mlflow.log_param("baseline_run_id", baseline_run_id)
+        mlflow.log_param("selected_search_run_id", baseline_run_id)
         mlflow.log_param("selected_threshold", selected_threshold)
         mlflow.log_params({f"cost_{key}": value for key, value in cost_settings.items()})
         mlflow.log_metrics(
             {
                 "val_pr_auc": optimized_metrics["pr_auc"],
+                "best_iteration": best_iteration,
                 "val_roc_auc": optimized_metrics["roc_auc"],
                 "val_precision": optimized_metrics["precision"],
                 "val_recall": optimized_metrics["recall"],
@@ -224,16 +388,17 @@ def train_model() -> dict[str, Any]:
             }
         )
         _log_cost_curve(cost_curve, selected_threshold)
+        _log_feature_importances(model, train_features.columns)
+        with tempfile.TemporaryDirectory() as temp_directory:
+            comparison_path = Path(temp_directory) / "hyperparameter_comparison.csv"
+            comparison_table.to_csv(comparison_path, index=False)
+            mlflow.log_artifact(str(comparison_path), artifact_path="hyperparameter_search")
         mlflow.log_artifact(str(model_path), artifact_path="model_file")
-        mlflow.lightgbm.log_model(
-            model,
-            artifact_path="model",
-            input_example=validation_features.head(3),
-            serialization_format="cloudpickle",
-        )
+        # Skip MLflow model logging due to dependency conflicts - model already saved as joblib artifact
         cost_run_id = cost_run.info.run_id
 
-    _register_production_model(cost_run_id, config)
+    # Skip MLflow model registration since model wasn't logged to MLflow
+    # _register_production_model(cost_run_id, config)
     LOGGER.info(
         "Training complete. Validation cost %.2f at threshold %.2f.",
         optimized_cost,
@@ -243,6 +408,8 @@ def train_model() -> dict[str, Any]:
         "model_path": model_path,
         "threshold": selected_threshold,
         "baseline_run_id": baseline_run_id,
+        "best_iteration": best_iteration,
+        "best_val_pr_auc": best_result["val_pr_auc"],
         "cost_optimized_run_id": cost_run_id,
         "validation_cost": optimized_cost,
     }
@@ -253,6 +420,7 @@ if __name__ == "__main__":
     results = train_model()
     print(
         "Training complete: "
-        f"threshold={results['threshold']:.2f}, validation_cost={results['validation_cost']:.2f}, "
+        f"threshold={results['threshold']:.6f}, validation_cost={results['validation_cost']:.2f}, "
+        f"best_iteration={results['best_iteration']}, val_pr_auc={results['best_val_pr_auc']:.6f}, "
         f"model={results['model_path']}"
     )

@@ -33,21 +33,27 @@ def compute_cost(
     y_pred_proba: Iterable[float],
     threshold: float,
     transaction_amounts: Iterable[float],
-    fp_cost: float,
+    fp_cost_rate: float,
     fn_cost_multiplier: float,
 ) -> tuple[float, dict[str, float | int]]:
-    """Return cost from a fraud threshold and a transparent error breakdown."""
+    """Return cost from a fraud threshold and a transparent error breakdown.
+
+    ``fp_cost_rate`` is the fraction of a legitimate transaction's amount lost
+    through false-positive friction or a declined sale.
+    """
     if not 0 <= threshold <= 1:
         raise ValueError("threshold must be between 0 and 1.")
-    if fp_cost < 0 or fn_cost_multiplier < 0:
-        raise ValueError("Cost weights must be non-negative.")
+    if not 0 <= fp_cost_rate <= 1:
+        raise ValueError("fp_cost_rate must be between 0 and 1.")
+    if fn_cost_multiplier < 0:
+        raise ValueError("fn_cost_multiplier must be non-negative.")
     labels, probabilities, amounts = _validated_arrays(
         y_true, y_pred_proba, transaction_amounts
     )
     predictions = probabilities >= threshold
     false_positives = (labels == 0) & predictions
     false_negatives = (labels == 1) & ~predictions
-    total_fp_cost = float(false_positives.sum() * fp_cost)
+    total_fp_cost = float(amounts[false_positives].sum() * fp_cost_rate)
     total_fn_cost = float(amounts[false_negatives].sum() * fn_cost_multiplier)
     total_cost = total_fp_cost + total_fn_cost
     return total_cost, {
@@ -63,7 +69,7 @@ def find_optimal_threshold(
     y_true: Iterable[int],
     y_pred_proba: Iterable[float],
     transaction_amounts: Iterable[float],
-    fp_cost: float,
+    fp_cost_rate: float,
     fn_cost_multiplier: float,
     thresholds: Iterable[float] | None = None,
 ) -> tuple[float, pd.DataFrame]:
@@ -72,7 +78,9 @@ def find_optimal_threshold(
         y_true, y_pred_proba, transaction_amounts
     )
     candidate_thresholds = (
-        np.linspace(0.01, 0.99, 99) if thresholds is None else np.asarray(list(thresholds))
+        np.linspace(probabilities.min(), probabilities.max(), 200)
+        if thresholds is None
+        else np.asarray(list(thresholds), dtype=float)
     )
     if candidate_thresholds.size == 0:
         raise ValueError("At least one candidate threshold is required.")
@@ -84,7 +92,7 @@ def find_optimal_threshold(
             probabilities,
             float(threshold),
             amounts,
-            fp_cost,
+            fp_cost_rate,
             fn_cost_multiplier,
         )
         rows.append({"threshold": float(threshold), "total_cost": total_cost, **breakdown})

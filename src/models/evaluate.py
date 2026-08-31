@@ -47,13 +47,13 @@ def evaluate_model() -> dict[str, Any]:
         probabilities,
         threshold,
         test_data["TransactionAmt"],
-        float(cost_settings["fp_cost"]),
+        float(cost_settings["fp_cost_rate"]),
         float(cost_settings["fn_cost_multiplier"]),
     )
     naive_costs = _naive_costs(
         y_test,
         test_data["TransactionAmt"],
-        float(cost_settings["fp_cost"]),
+        float(cost_settings["fp_cost_rate"]),
         float(cost_settings["fn_cost_multiplier"]),
     )
     summary = {
@@ -82,7 +82,7 @@ def evaluate_model() -> dict[str, Any]:
 
     printable = pd.DataFrame(
         [
-            ("Threshold", f"{threshold:.2f}"),
+            ("Threshold", f"{threshold:.6f}"),
             ("Precision", f"{precision:.4f}"),
             ("Recall", f"{recall:.4f}"),
             ("F1", f"{f1:.4f}"),
